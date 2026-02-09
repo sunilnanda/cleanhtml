@@ -9,6 +9,7 @@ function cleanHTML(html: string): string {
 
   processNode(body);
   removeEmptyElements(body);
+  autoLinkEmailsAndPhones(body);
 
   return body.innerHTML.trim();
 }
@@ -68,6 +69,9 @@ function checkForHeadingMarker(element: Element): boolean {
   } else if (textContent.startsWith("H3:")) {
     headingLevel = "h3";
     prefix = "H3:";
+  } else if (textContent.startsWith("H4:")) {
+    headingLevel = "h4";
+    prefix = "H4:";
   }
 
   if (!headingLevel || !prefix) return false;
@@ -127,6 +131,76 @@ function removeEmptyElements(node: Node): void {
     if (element.innerHTML.trim() === "" && !hasUsefulAttributes(element)) {
       element.parentNode?.removeChild(element);
     }
+  }
+}
+
+// Australian phone patterns:
+// Mobile: 04XX XXX XXX, Landline: (0X) XXXX XXXX or 0X XXXX XXXX
+// 1300/1800: 1300 XXX XXX, 1800 XXX XXX
+// International: +61 X XXXX XXXX
+const PHONE_REGEX =
+  /(?:\+61\s?\d[\s-]?\d{4}[\s-]?\d{4})|(?:\(0\d\)\s?\d{4}[\s-]?\d{4})|(?:0[2-478]\s?\d{4}[\s-]?\d{4})|(?:04\d{2}[\s-]?\d{3}[\s-]?\d{3})|(?:1[38]00[\s-]?\d{3}[\s-]?\d{3})/g;
+
+const EMAIL_REGEX = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+
+function autoLinkEmailsAndPhones(root: Node): void {
+  const textNodes: Text[] = [];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  while (walker.nextNode()) {
+    textNodes.push(walker.currentNode as Text);
+  }
+
+  for (const textNode of textNodes) {
+    // Skip if already inside a link
+    if (textNode.parentElement?.closest("a")) continue;
+
+    const text = textNode.textContent || "";
+    // Build a combined regex to find all matches in order
+    const combined = new RegExp(
+      `(${PHONE_REGEX.source})|(${EMAIL_REGEX.source})`,
+      "g"
+    );
+    const matches = [...text.matchAll(combined)];
+    if (matches.length === 0) continue;
+
+    const fragment = document.createDocumentFragment();
+    let lastIndex = 0;
+
+    for (const match of matches) {
+      const matchText = match[0];
+      const matchIndex = match.index!;
+
+      // Add text before this match
+      if (matchIndex > lastIndex) {
+        fragment.appendChild(
+          document.createTextNode(text.substring(lastIndex, matchIndex))
+        );
+      }
+
+      const anchor = document.createElement("a");
+      anchor.textContent = matchText;
+
+      if (match[1]) {
+        // Phone match — strip spaces/dashes for the tel: href
+        const digits = matchText.replace(/[\s()-]/g, "");
+        anchor.href = `tel:${digits}`;
+      } else {
+        // Email match
+        anchor.href = `mailto:${matchText}`;
+      }
+
+      fragment.appendChild(anchor);
+      lastIndex = matchIndex + matchText.length;
+    }
+
+    // Add remaining text after last match
+    if (lastIndex < text.length) {
+      fragment.appendChild(
+        document.createTextNode(text.substring(lastIndex))
+      );
+    }
+
+    textNode.parentNode?.replaceChild(fragment, textNode);
   }
 }
 
@@ -320,9 +394,20 @@ export default function Home() {
       showToast("Nothing to clean");
       return;
     }
-    const cleaned = output.replace(/<br\s*\/?>/gi, "");
+    let cleaned = output.replace(/<br\s*\/?>/gi, "");
+    // Remove empty paragraphs left behind
+    cleaned = cleaned.replace(/<p>\s*<\/p>/gi, "");
     setOutput(cleaned);
-    showToast("Removed <br> tags!");
+
+    // Also strip <br> tags and blank lines from the input editor
+    if (editorRef.current) {
+      const inputHTML = editorRef.current.innerHTML;
+      let cleanedInput = inputHTML.replace(/<br\s*\/?>/gi, "");
+      cleanedInput = cleanedInput.replace(/<p>\s*<\/p>/gi, "");
+      editorRef.current.innerHTML = cleanedInput;
+    }
+
+    showToast("Removed <br> tags and blank lines!");
   };
 
   const handleClear = () => {
@@ -355,9 +440,12 @@ export default function Home() {
       {/* Header */}
       <header className="bg-white dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 px-6 py-3">
         <div className="max-w-full mx-auto flex items-center justify-between">
-          <h1 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100">
-            ✨ HTML Cleaner
-          </h1>
+          <div className="flex items-baseline gap-2">
+            <h1 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100">
+              ✨ HTML Cleaner
+            </h1>
+            <span className="text-xs text-zinc-400 dark:text-zinc-500">v0.1.0</span>
+          </div>
           <div className="flex gap-2">
             <button
               onClick={handleClear}
@@ -374,7 +462,7 @@ export default function Home() {
       <main className="flex-1 flex flex-row min-h-0">
         {/* Input Panel - WYSIWYG Editor */}
         <div className="flex-1 flex flex-col border-r border-zinc-200 dark:border-zinc-800 min-w-0">
-          <div className="px-4 py-3 bg-zinc-50 dark:bg-zinc-800/50 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between">
+          <div className="px-4 py-3 bg-zinc-50 dark:bg-zinc-800/50 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between min-h-[52px]">
             <h2 className="text-sm font-medium text-zinc-600 dark:text-zinc-400">
               📝 Paste Content Here
             </h2>
@@ -395,7 +483,7 @@ export default function Home() {
 
         {/* Output Panel */}
         <div className="flex-1 flex flex-col min-w-0">
-          <div className="px-4 py-3 bg-zinc-50 dark:bg-zinc-800/50 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between gap-2">
+          <div className="px-4 py-3 bg-zinc-50 dark:bg-zinc-800/50 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between gap-2 min-h-[52px]">
             <h2 className="text-sm font-medium text-zinc-600 dark:text-zinc-400 shrink-0">
               🧼 Cleaned Output
             </h2>
