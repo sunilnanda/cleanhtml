@@ -1,7 +1,8 @@
 @import "tailwindcss";
+@plugin "@tailwindcss/typography";
 
 :root {
-  --background: #ffffff;
+  --background: #f5f5f5;
   --foreground: #171717;
 }
 
@@ -22,5 +23,32 @@
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+}
+
+.wysiwyg-editor:empty::before {
+  content: attr(data-placeholder);
+  color: #a1a1aa;
+  pointer-events: none;
+}
+
+.wysiwyg-editor {
+  min-height: 0;
+  line-height: 1.6;
+}
+
+.wysiwyg-editor img {
+  max-width: 100%;
+  height: auto;
+}
+
+.wysiwyg-editor table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.wysiwyg-editor td,
+.wysiwyg-editor th {
+  border: 1px solid #d4d4d8;
+  padding: 0.5rem;
 }
