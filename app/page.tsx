@@ -1,266 +1,10 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
-
-function cleanHTML(html: string): string {
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(html, "text/html");
-  const body = doc.body;
-
-  processNode(body);
-  removeEmptyElements(body);
-  autoLinkEmailsAndPhones(body);
-
-  return body.innerHTML.trim();
-}
-
-function processNode(node: Node): void {
-  const children = Array.from(node.childNodes);
-  children.forEach((child) => {
-    if (child.nodeType === Node.ELEMENT_NODE) {
-      processNode(child);
-    }
-  });
-
-  if (node.nodeType !== Node.ELEMENT_NODE) return;
-
-  const element = node as Element;
-
-  // Strip unwanted attributes (class, style, dir, aria-level, role="presentation")
-  const attrsToRemove = ["class", "style", "dir", "aria-level"];
-  attrsToRemove.forEach((attr) => element.removeAttribute(attr));
-
-  if (element.getAttribute("role") === "presentation") {
-    element.removeAttribute("role");
-  }
-
-  // Remove empty attributes
-  Array.from(element.attributes).forEach((attr) => {
-    if (attr.value.trim() === "") {
-      element.removeAttribute(attr.name);
-    }
-  });
-
-  // Check for heading markers
-  if (checkForHeadingMarker(element)) {
-    return;
-  }
-
-  // Unwrap ALL span tags
-  if (element.tagName === "SPAN") {
-    unwrapElement(element);
-  }
-}
-
-function checkForHeadingMarker(element: Element): boolean {
-  if (element.tagName !== "P") return false;
-
-  const textContent = element.textContent?.trim() || "";
-
-  let headingLevel: string | null = null;
-  let prefix: string | null = null;
-
-  if (textContent.startsWith("H1:")) {
-    headingLevel = "h1";
-    prefix = "H1:";
-  } else if (textContent.startsWith("H2:")) {
-    headingLevel = "h2";
-    prefix = "H2:";
-  } else if (textContent.startsWith("H3:")) {
-    headingLevel = "h3";
-    prefix = "H3:";
-  } else if (textContent.startsWith("H4:")) {
-    headingLevel = "h4";
-    prefix = "H4:";
-  }
-
-  if (!headingLevel || !prefix) return false;
-
-  const headingText = textContent.substring(prefix.length).trim();
-  const heading = document.createElement(headingLevel);
-  heading.textContent = headingText;
-
-  element.parentNode?.replaceChild(heading, element);
-  return true;
-}
-
-function hasUsefulAttributes(element: Element): boolean {
-  const usefulAttrs = ["href", "src", "alt", "title", "id", "name", "data-", "aria-", "role"];
-
-  for (const attr of Array.from(element.attributes)) {
-    if (usefulAttrs.some((useful) => attr.name.startsWith(useful))) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function unwrapElement(element: Element): void {
-  const parent = element.parentNode;
-  if (!parent) return;
-
-  while (element.firstChild) {
-    parent.insertBefore(element.firstChild, element);
-  }
-  parent.removeChild(element);
-}
-
-function removeEmptyElements(node: Node): void {
-  const children = Array.from(node.childNodes);
-  children.forEach((child) => {
-    if (child.nodeType === Node.ELEMENT_NODE) {
-      removeEmptyElements(child);
-    }
-  });
-
-  if (node.nodeType !== Node.ELEMENT_NODE) return;
-
-  const element = node as Element;
-  if (element === element.ownerDocument?.body) return;
-
-  if (element.tagName === "P") {
-    const innerHTML = element.innerHTML.trim();
-    if (innerHTML === "" || innerHTML === "<br>" || innerHTML.toLowerCase() === "<br/>") {
-      element.parentNode?.removeChild(element);
-      return;
-    }
-  }
-
-  const selfClosing = ["IMG", "BR", "HR", "INPUT", "META", "LINK"];
-  if (!selfClosing.includes(element.tagName)) {
-    if (element.innerHTML.trim() === "" && !hasUsefulAttributes(element)) {
-      element.parentNode?.removeChild(element);
-    }
-  }
-}
-
-// Australian phone patterns:
-// Mobile: 04XX XXX XXX, Landline: (0X) XXXX XXXX or 0X XXXX XXXX
-// 1300/1800: 1300 XXX XXX, 1800 XXX XXX
-// International: +61 X XXXX XXXX
-const PHONE_REGEX =
-  /(?:\+61\s?\d[\s-]?\d{4}[\s-]?\d{4})|(?:\(0\d\)\s?\d{4}[\s-]?\d{4})|(?:0[2-478]\s?\d{4}[\s-]?\d{4})|(?:04\d{2}[\s-]?\d{3}[\s-]?\d{3})|(?:1[38]00[\s-]?\d{3}[\s-]?\d{3})/g;
-
-const EMAIL_REGEX = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
-
-function autoLinkEmailsAndPhones(root: Node): void {
-  const textNodes: Text[] = [];
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  while (walker.nextNode()) {
-    textNodes.push(walker.currentNode as Text);
-  }
-
-  for (const textNode of textNodes) {
-    // Skip if already inside a link
-    if (textNode.parentElement?.closest("a")) continue;
-
-    const text = textNode.textContent || "";
-    // Build a combined regex to find all matches in order
-    const combined = new RegExp(
-      `(${PHONE_REGEX.source})|(${EMAIL_REGEX.source})`,
-      "g"
-    );
-    const matches = [...text.matchAll(combined)];
-    if (matches.length === 0) continue;
-
-    const fragment = document.createDocumentFragment();
-    let lastIndex = 0;
-
-    for (const match of matches) {
-      const matchText = match[0];
-      const matchIndex = match.index!;
-
-      // Add text before this match
-      if (matchIndex > lastIndex) {
-        fragment.appendChild(
-          document.createTextNode(text.substring(lastIndex, matchIndex))
-        );
-      }
-
-      const anchor = document.createElement("a");
-      anchor.textContent = matchText;
-
-      if (match[1]) {
-        // Phone match — strip spaces/dashes for the tel: href
-        const digits = matchText.replace(/[\s()-]/g, "");
-        anchor.href = `tel:${digits}`;
-      } else {
-        // Email match
-        anchor.href = `mailto:${matchText}`;
-      }
-
-      fragment.appendChild(anchor);
-      lastIndex = matchIndex + matchText.length;
-    }
-
-    // Add remaining text after last match
-    if (lastIndex < text.length) {
-      fragment.appendChild(
-        document.createTextNode(text.substring(lastIndex))
-      );
-    }
-
-    textNode.parentNode?.replaceChild(fragment, textNode);
-  }
-}
-
-const VOID_ELEMENTS = new Set([
-  "area", "base", "br", "col", "embed", "hr", "img", "input",
-  "link", "meta", "param", "source", "track", "wbr",
-]);
-
-function beautifyHTML(html: string): string {
-  // Normalize whitespace between tags
-  let result = html.replace(/>\s+</g, "><");
-  const tokens: string[] = [];
-  let i = 0;
-  while (i < result.length) {
-    if (result[i] === "<") {
-      const end = result.indexOf(">", i);
-      if (end === -1) {
-        tokens.push(result.substring(i));
-        break;
-      }
-      tokens.push(result.substring(i, end + 1));
-      i = end + 1;
-    } else {
-      const end = result.indexOf("<", i);
-      if (end === -1) {
-        tokens.push(result.substring(i));
-        break;
-      }
-      const text = result.substring(i, end);
-      if (text.trim()) tokens.push(text);
-      i = end;
-    }
-  }
-
-  const lines: string[] = [];
-  let indent = 0;
-  for (const token of tokens) {
-    if (token.startsWith("</")) {
-      indent = Math.max(0, indent - 1);
-      lines.push("  ".repeat(indent) + token);
-    } else if (token.startsWith("<")) {
-      const tagName = token.replace(/<\/?(\w+)[\s>].*/, "$1").toLowerCase();
-      const isSelfClosing = token.endsWith("/>") || VOID_ELEMENTS.has(tagName);
-      lines.push("  ".repeat(indent) + token);
-      if (!isSelfClosing && !token.startsWith("<!")) {
-        indent++;
-      }
-    } else {
-      lines.push("  ".repeat(indent) + token);
-    }
-  }
-  return lines.join("\n");
-}
-
-function minifyHTML(html: string): string {
-  return html
-    .replace(/\n\s*/g, "")
-    .replace(/>\s+</g, "><")
-    .trim();
-}
+import DOMPurify from "dompurify";
+import { cleanHTML, beautifyHTML, minifyHTML } from "@/lib/html-cleaner";
+import { useDebouncedCallback } from "@/lib/use-debounce";
+import pkg from "@/package.json";
 
 export default function Home() {
   const [output, setOutput] = useState("");
@@ -292,7 +36,7 @@ export default function Home() {
       outputCodeRef.current.value = displayOutput;
     }
     if (outputMode === "preview" && outputEditorRef.current) {
-      outputEditorRef.current.innerHTML = output;
+      outputEditorRef.current.innerHTML = DOMPurify.sanitize(output);
     }
   }, [output, outputMode, displayOutput]);
 
@@ -305,11 +49,13 @@ export default function Home() {
     setOutput(cleaned);
   }, []);
 
+  const debouncedRunClean = useDebouncedCallback(runClean, 150);
+
   const handleEditorInput = useCallback(() => {
     if (editorRef.current) {
-      runClean(editorRef.current.innerHTML);
+      debouncedRunClean(editorRef.current.innerHTML);
     }
-  }, [runClean]);
+  }, [debouncedRunClean]);
 
   const handlePaste = useCallback((e: React.ClipboardEvent) => {
     e.preventDefault();
@@ -370,7 +116,7 @@ export default function Home() {
 
       // Get plain text version
       const div = document.createElement("div");
-      div.innerHTML = htmlContent;
+      div.innerHTML = DOMPurify.sanitize(htmlContent);
       const plainContent = selectedHTML
         ? div.innerText
         : (outputEditorRef.current?.innerText || div.innerText);
@@ -395,19 +141,22 @@ export default function Home() {
       return;
     }
     let cleaned = output.replace(/<br\s*\/?>/gi, "");
+    // Remove HTML comments (e.g. <!--StartFragment-->, <!--EndFragment-->)
+    cleaned = cleaned.replace(/<!--[\s\S]*?-->/g, "");
     // Remove empty paragraphs left behind
     cleaned = cleaned.replace(/<p>\s*<\/p>/gi, "");
     setOutput(cleaned);
 
-    // Also strip <br> tags and blank lines from the input editor
+    // Also strip <br> tags, comments, and blank lines from the input editor
     if (editorRef.current) {
       const inputHTML = editorRef.current.innerHTML;
       let cleanedInput = inputHTML.replace(/<br\s*\/?>/gi, "");
+      cleanedInput = cleanedInput.replace(/<!--[\s\S]*?-->/g, "");
       cleanedInput = cleanedInput.replace(/<p>\s*<\/p>/gi, "");
       editorRef.current.innerHTML = cleanedInput;
     }
 
-    showToast("Removed <br> tags and blank lines!");
+    showToast("Removed <br> tags, comments, and blank lines!");
   };
 
   const handleClear = () => {
@@ -444,11 +193,12 @@ export default function Home() {
             <h1 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100">
               ✨ HTML Cleaner
             </h1>
-            <span className="text-xs text-zinc-400 dark:text-zinc-500">v0.1.0</span>
+            <span className="text-xs text-zinc-400 dark:text-zinc-500">v{pkg.version}</span>
           </div>
           <div className="flex gap-2">
             <button
               onClick={handleClear}
+              aria-label="Clear all content"
               className="px-4 py-2 bg-zinc-200 dark:bg-zinc-700 text-zinc-800 dark:text-zinc-200 rounded-lg font-medium hover:bg-zinc-300 dark:hover:bg-zinc-600 transition-colors flex items-center gap-2"
               title="Clear all"
             >
@@ -475,6 +225,9 @@ export default function Home() {
             contentEditable
             onInput={handleEditorInput}
             onPaste={handlePaste}
+            role="textbox"
+            aria-label="Rich text input editor"
+            aria-multiline="true"
             data-placeholder="Paste your content from Word, Google Docs, or any rich text source..."
             className="wysiwyg-editor flex-1 w-full p-4 bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 overflow-auto focus:outline-none"
             spellCheck={false}
@@ -489,9 +242,11 @@ export default function Home() {
             </h2>
             <div className="flex items-center gap-2 flex-wrap">
               {/* HTML / Preview toggle */}
-              <div className="flex rounded-md overflow-hidden border border-zinc-300 dark:border-zinc-600 text-xs">
+              <div className="flex rounded-md overflow-hidden border border-zinc-300 dark:border-zinc-600 text-xs" role="group" aria-label="Output view mode">
                 <button
                   onClick={() => setOutputMode("html")}
+                  aria-label="Show HTML code"
+                  aria-pressed={outputMode === "html"}
                   className={`px-3 py-1 font-medium transition-colors ${
                     outputMode === "html"
                       ? "bg-blue-600 text-white"
@@ -502,6 +257,8 @@ export default function Home() {
                 </button>
                 <button
                   onClick={() => setOutputMode("preview")}
+                  aria-label="Show formatted preview"
+                  aria-pressed={outputMode === "preview"}
                   className={`px-3 py-1 font-medium transition-colors ${
                     outputMode === "preview"
                       ? "bg-blue-600 text-white"
@@ -513,9 +270,11 @@ export default function Home() {
               </div>
               {/* Beautify / Minify toggle (only in HTML mode) */}
               {outputMode === "html" && (
-                <div className="flex rounded-md overflow-hidden border border-zinc-300 dark:border-zinc-600 text-xs">
+                <div className="flex rounded-md overflow-hidden border border-zinc-300 dark:border-zinc-600 text-xs" role="group" aria-label="HTML format mode">
                   <button
                     onClick={() => setHtmlFormat("beautify")}
+                    aria-label="Beautify HTML output"
+                    aria-pressed={htmlFormat === "beautify"}
                     className={`px-3 py-1 font-medium transition-colors ${
                       htmlFormat === "beautify"
                         ? "bg-emerald-600 text-white"
@@ -526,6 +285,8 @@ export default function Home() {
                   </button>
                   <button
                     onClick={() => setHtmlFormat("minify")}
+                    aria-label="Minify HTML output"
+                    aria-pressed={htmlFormat === "minify"}
                     className={`px-3 py-1 font-medium transition-colors ${
                       htmlFormat === "minify"
                         ? "bg-emerald-600 text-white"
@@ -539,6 +300,7 @@ export default function Home() {
               {/* Remove <br> */}
               <button
                 onClick={handleRemoveBr}
+                aria-label="Remove all line break tags"
                 className="px-3 py-1 text-xs font-medium rounded-md border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-700 transition-colors"
                 title="Remove all <br> tags"
               >
@@ -547,6 +309,7 @@ export default function Home() {
               {/* Copy buttons */}
               <button
                 onClick={handleCopyHTML}
+                aria-label="Copy raw HTML code"
                 className="px-3 py-1 text-xs font-medium rounded-md border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-700 transition-colors"
                 title="Copy raw HTML code (selection or all)"
               >
@@ -554,6 +317,7 @@ export default function Home() {
               </button>
               <button
                 onClick={handleCopyFormatted}
+                aria-label="Copy formatted content"
                 className="px-3 py-1 text-xs font-medium rounded-md border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-700 transition-colors"
                 title="Copy formatted content (selection or all)"
               >
@@ -568,6 +332,7 @@ export default function Home() {
               ref={outputCodeRef}
               defaultValue={displayOutput}
               onInput={handleOutputHtmlEdit}
+              aria-label="Cleaned HTML code output"
               placeholder="Cleaned HTML will appear here..."
               className="flex-1 w-full p-4 font-mono text-sm bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 resize-none focus:outline-none"
               spellCheck={false}
@@ -580,6 +345,9 @@ export default function Home() {
               ref={outputEditorRef}
               contentEditable
               onInput={handleOutputPreviewEdit}
+              role="textbox"
+              aria-label="Cleaned output preview"
+              aria-multiline="true"
               className="wysiwyg-editor flex-1 w-full p-6 bg-white dark:bg-zinc-900 overflow-auto prose dark:prose-invert max-w-none focus:outline-none"
               spellCheck={false}
             />
@@ -589,6 +357,8 @@ export default function Home() {
 
       {/* Toast */}
       <div
+        role="status"
+        aria-live="polite"
         className={`fixed bottom-6 left-1/2 -translate-x-1/2 px-4 py-2 bg-zinc-800 dark:bg-zinc-200 text-white dark:text-zinc-900 rounded-lg text-sm font-medium transition-all duration-300 ${
           toast ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4 pointer-events-none"
         }`}
